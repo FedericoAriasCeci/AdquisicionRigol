@@ -1,73 +1,90 @@
 import pyvisa
 import time
 import pandas as pd
-import matplotlib.pyplot as plt
 
 # --- Configuración Básica ---
 RESOURCE_NAME = 'USB0::0x1AB1::0x044C::DHO9S264705563::INSTR'
-CANAL = 2
+CH_X = 1        # Canal 1: Monitoreo de Duty Cycles enviado a X
+CH_LUZ = 2      # Canal 2: Intensidad del fotodiodo (Scattering)
 
-# --- Configuración del Datalogger ---
-INTERVALO_SEG = 0.001       # Tiempo de espera entre mediciones (en segundos)
-CANTIDAD_PUNTOS = 1000      # Cuántas mediciones tomar en total
-ARCHIVO_CSV = 'mapeo_temporal_2.csv'
+# --- Configuración del Muestreo Coincidente con el ESP32 ---
+CANTIDAD_PUNTOS = 24231      # Total de puntos del barrido 2D
+INTERVALO_SEG = 0.05         # Tiempo estimado entre puntos (pueden ajustarlo)
+ARCHIVO_CSV = 'mapeo_scattering_punto_a_punto_v3.csv'
 
-def adquisicion_continua():
+def adquisicion_punto_a_punto():
     rm = pyvisa.ResourceManager()
     tiempos = []
-    voltajes = []
+    voltajes_x = []
+    voltajes_luz = []
     
     try:
-        # 1. Conexión y purga
+        # 1. Conexión y limpieza
         scope = rm.open_resource(RESOURCE_NAME)
         scope.timeout = 5000  
         scope.write('*CLS')
         
-        # 2. Activamos la medición explícitamente en pantalla
-        scope.write(f':MEASure:ITEM VAVG,CHAN{CANAL}')
-        time.sleep(0.5) # Le damos changüí al hardware para que procese la primera vez
+        # 2. Habilitamos los canales y activamos la medición de promedio (VAVG) en pantalla
+        scope.write(f':MEASure:ITEM VAVG,CHANnel{CH_X}')
+        scope.write(f':MEASure:ITEM VAVG,CHANnel{CH_LUZ}')
+        time.sleep(0.5) # Pausa técnica para que el firmware del RIGOL procese los comandos
         
-        print(f"Arrancando adquisición: {CANTIDAD_PUNTOS} puntos cada {INTERVALO_SEG} seg...")
+        print(f"Preparado para adquirir {CANTIDAD_PUNTOS} puntos.")
+        print("--> ¡Iniciá el barrido desde Thonny / ESP32 AHORA! <--")
         
-        # Guardamos el tiempo exacto en el que arranca el cronómetro
+        # Guardamos el instante exacto de inicio
         tiempo_cero = time.time()
         
-        # 3. Bucle de muestreo
+        # 3. Bucle de muestreo punto a punto
         for k in range(CANTIDAD_PUNTOS):
-            # Le pedimos el promedio al osciloscopio
-            respuesta = scope.query(f':MEASure:ITEM? VAVG,CHAN{CANAL}')
-            valor_v = float(respuesta.strip())
+            t_inicio_punto = time.time()
             
-            # Calculamos cuántos segundos pasaron desde que arrancamos
+            # Consultamos el voltaje promedio de la posición X (CH1)
+            resp_x = scope.query(f':MEASure:ITEM? VAVG,CHANnel{CH_X}')
+            v_x = float(resp_x.strip())
+            
+            # Consultamos el voltaje promedio de la luz (CH2)
+            resp_luz = scope.query(f':MEASure:ITEM? VAVG,CHANnel{CH_LUZ}')
+            v_luz = float(resp_luz.strip())
+            
+            # Registramos el tiempo transcurrido
             tiempo_actual = time.time() - tiempo_cero
             
-            # Guardamos los datos en las listas
+            # Guardamos en las listas
             tiempos.append(tiempo_actual)
-            voltajes.append(valor_v)
+            voltajes_x.append(v_x)
+            voltajes_luz.append(v_luz)
             
-            #print(f"Punto {k+1}/{CANTIDAD_PUNTOS} | Tiempo: {tiempo_actual:.2f} s | V_Promedio: {valor_v:.5f} V")
+            # if (k + 1) % 100 == 0 or (k + 1) == CANTIDAD_PUNTOS:
+            #     print(f"Progreso: {k+1}/{CANTIDAD_PUNTOS} puntos | X: {v_x:.4f}V | Luz: {v_luz:.5f}V")
             
-            # Esperamos el intervalo definido antes de la próxima medición
-            #time.sleep(INTERVALO_SEG)
+            # Sincronización temporal activa: 
+            # Restamos el tiempo que demoró la comunicación VISA para mantener el paso de 0.1s regular
+            tiempo_transcurrido_punto = time.time() - t_inicio_punto
+            tiempo_espera = INTERVALO_SEG - tiempo_transcurrido_punto
+
+            if tiempo_espera > 0:
+                time.sleep(tiempo_espera)
             
-        # 4. Cerramos conexión al terminar el bucle
+        # 4. Cerramos conexión de forma segura
         scope.close()
-        return tiempos, voltajes
+        return tiempos, voltajes_x, voltajes_luz
 
     except Exception as e:
-        print(f"Error en la comunicación: {e}")
-        return tiempos, voltajes # Devolvemos lo que haya llegado a medir antes del error
+        print(f"\n[!] Error en la comunicación durante la adquisición: {e}")
+        return tiempos, voltajes_x, voltajes_luz
 
 if __name__ == '__main__':
-    t_datos, v_datos = adquisicion_continua()
+    t_datos, v_x_datos, v_luz_datos = adquisicion_punto_a_punto()
     
     if len(t_datos) > 0:
-        # Guardamos todo en un archivo CSV
-        df = pd.DataFrame({'Tiempo (s)': t_datos, f'Voltaje Medio CH{CANAL} (V)': v_datos})
+        # Guardamos la matriz completa en el CSV
+        df = pd.DataFrame({
+            'Tiempo (s)': t_datos, 
+            'Monitoreo_X_CH1 (V)': v_x_datos, 
+            'Scattering_CH2 (V)': v_luz_datos
+        })
         df.to_csv(ARCHIVO_CSV, index=False)
-        print(f"\n¡Listo! Los {len(t_datos)} datos se guardaron en '{ARCHIVO_CSV}'")
-        
-        
+        print(f"\n¡Mapeo terminado con éxito! Se guardaron {len(t_datos)} puntos en '{ARCHIVO_CSV}'")
     else:
         print("No se pudieron recolectar datos.")
-
