@@ -1,29 +1,51 @@
-import numpy as np
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import griddata
-import os
-os.chdir(r'c:\Users\LEC\Desktop\Laboratorio6')
-# ---------------------------------------------------------
-# 1. CARGA Y DEFINICIÓN DEL MODELO DIRECTO
-# ---------------------------------------------------------
 
-promedio_cross_x = [-0.03461811951503092, 0]
-promedio_cross_y = [-0.06852970480292754, 0]
+# ==========================================================================
+# 0. CONFIGURACIÓN — AJUSTAR ESTOS NOMBRES A LOS ARCHIVOS REALES DE ESTE BARRIDO
+# ==========================================================================
 
-# Intenta leer tus datos de ajuste. 
-# Al usar poly1d, si las columnas de promedio_x tienen 4 elementos, arma grado 3 solo.
-datos_ajuste_x = pd.read_csv(r'Calibración\Aproach_NR\ajuste_cubico_x_calv1_1906.csv') 
-datos_ajuste_y = pd.read_csv(r'Calibración\Aproach_NR\ajuste_cubico_y_calv1_1906.csv')
+# Fecha de la calibración usada para ESTE barrido (misma que en calculo_dcs.py)
+fecha_calibracion = '0107'
+
+# CSV con la secuencia de duty cycles programada en el ESP32 para este barrido
+# (el que generó calculo_dcs.py con dutys_csv.to_csv(...))
+archivo_dutys = fr'C:\Users\LEC\Desktop\AdquisicionRigol\dutys_scanning_xy_0107_2000.csv'   # <-- completar con el nombre real
+
+# CSV de la adquisición (Tiempo, Monitoreo_X_CH1, Scattering_CH2)
+version = 'v5_0107'
+archivo_csv_adquisicion = fr'C:\Users\LEC\Desktop\AdquisicionRigol\mapeo_scattering_punto_a_punto_v5_0107.csv'
+
+# Umbral para descartar puntos saturados/espurios de Scattering_CH2 (V)
+UMBRAL_SATURACION = 1.0
+
+# Resolución de la grilla de salida (píxeles de la imagen reconstruida)
+NUM_PIXELS_X = 500
+NUM_PIXELS_Y = 300
+
+
+# ==========================================================================
+# 1. RECONSTRUIR EL MODELO CINEMÁTICO (idéntico a calculo_dcs.py)
+# ==========================================================================
+
+promedio_cross_x = pd.read_csv(fr'C:\Users\LEC\Desktop\Laboratorio6\Calibración\Datos_ajuste\ajuste_lin_x_calv1_0107.csv')
+promedio_cross_y = pd.read_csv(fr'C:\Users\LEC\Desktop\Laboratorio6\Calibración\Datos_ajuste\ajuste_lin_y_calv1_0107.csv')
+                                    
+promedio_cross_x = [promedio_cross_x['m'].mean(), 0]
+promedio_cross_y = [promedio_cross_y['m'].mean(), 0]
+
+datos_ajuste_x = pd.read_csv(fr'C:\Users\LEC\Desktop\Laboratorio6\Calibración\Datos_ajuste\ajuste_cubico_x_calv1_0107.csv')
+datos_ajuste_y = pd.read_csv(fr'C:\Users\LEC\Desktop\Laboratorio6\Calibración\Datos_ajuste\ajuste_cubico_y_calv1_0107.csv')
 
 promedio_x = datos_ajuste_x.mean()[1::]
-coefs_x = [coef for coef in promedio_x] 
+coefs_x = [coef for coef in promedio_x]
 coefs_x[-1] = 0
 
 promedio_y = datos_ajuste_y.mean()[1::]
-coefs_y = [coef for coef in promedio_y] 
+coefs_y = [coef for coef in promedio_y]
 coefs_y[-1] = 0
-
 
 cross_x = np.poly1d(promedio_cross_x)
 cross_y = np.poly1d(promedio_cross_y)
@@ -31,87 +53,98 @@ cross_y = np.poly1d(promedio_cross_y)
 polinomio_x = np.poly1d(coefs_x)
 polinomio_y = np.poly1d(coefs_y)
 
-d_polinomio_x = np.polyder(polinomio_x)
-d_polinomio_y = np.polyder(polinomio_y)
 
-os.chdir(r'C:\Users\LEC\Desktop\AdquisicionRigol')
-# =========================================================
-# 1. CARGA DE DATOS (Asegurate de poner los nombres correctos)
-# =========================================================
-# El archivo que guardó el RIGOL con los promedios
-df_medicion = pd.read_csv('mapeo_scattering_punto_a_punto_v3.csv')
-
-# El archivo que generó tu script NR_testeo_v2.py con los Duty Cycles
-# (Buscá el nombre exacto con la hora que te generó, ej: 'dutys_barrido_discreto_x_2906_1811.csv')
-df_dutys = pd.read_csv('dutys_barrido_discreto_x_2906_1714.csv') 
-
-# =========================================================
-# 2. ALINEACIÓN Y CONVERSIÓN A DUTY CYCLES
-# =========================================================
-# Por si el osciloscopio capturó algún punto de menos o de más, igualamos longitudes
-min_len = min(len(df_medicion), len(df_dutys))
-print(f'Puntos recorridos: {len(df_dutys)}')
-print(f'Datos tomados: {len(df_medicion)}')
+def cinematica_directa(dcx, dcy):
+    """
+    Convierte duty cycles (dcx, dcy) a posición física real (X, Y) en micrones,
+    usando el mismo modelo (no linealidad + cross-talk) que calculo_dcs.py.
+    """
+    X_fisico = polinomio_x(dcx) + cross_y(polinomio_y(dcy))
+    Y_fisico = polinomio_y(dcy) + cross_x(polinomio_x(dcx))
+    return X_fisico, Y_fisico
 
 
-# Voltaje máximo real de tu señal PWM (típicamente 3.3V para un ESP32)
-# Ajustá este valor si tu cuadrada tiene un pico distinto en el osciloscopio
-V_MAX_PWM = 0.32458 
+# ==========================================================================
+# 2. CARGAR LA SECUENCIA DE DUTY CYCLES PROGRAMADA (posición real objetivo)
+# ==========================================================================
 
-# Calculamos el Duty Cycle REAL en X midiendo el Vavg del Canal 1
-dcx_real_medido = (df_medicion['Monitoreo_X_CH1 (V)'].values[:min_len]) / V_MAX_PWM
+df_dutys = pd.read_csv(archivo_dutys)
+# El CSV se guardó con to_csv() sin index=False -> puede traer una columna "Unnamed: 0"
+df_dutys = df_dutys.loc[:, ~df_dutys.columns.str.contains('^Unnamed')]
 
-# Usamos el Duty Cycle TEÓRICO en Y (asumimos que en Y el ESP no pierde pasos)
-dcy_teorico = df_dutys['Dcy'].values[:min_len]
+dcx_seq = df_dutys['Dcx'].values
+dcy_seq = df_dutys['Dcy'].values
 
-# Extraemos la intensidad de scattering
-intensidad_luz = df_medicion['Scattering_CH2 (V)'].values[:min_len]
+x_real, y_real = cinematica_directa(dcx_seq, dcy_seq)
 
-# =========================================================
-# 3. CINEMÁTICA DIRECTA (TU MODELO FÍSICO)
-# =========================================================
-# Usamos tus mismos polinomios para pasar de DC a Micrones reales compensando Cross-Talk
-X_fisico = polinomio_x(dcx_real_medido) + cross_x(polinomio_y(dcy_teorico))
-Y_fisico = polinomio_y(dcy_teorico) + cross_y(polinomio_x(dcx_real_medido))
 
-# =========================================================
-# 4. INTERPOLACIÓN EN GRILLA RECTANGULAR
-# =========================================================
-# Definimos los límites físicos del mapa en micrones
-x_min, x_max = X_fisico.min(), X_fisico.max()
-y_min, y_max = Y_fisico.min(), Y_fisico.max()
+# ==========================================================================
+# 3. CARGAR LOS DATOS ADQUIRIDOS (Scattering)
+# ==========================================================================
 
-# Creamos una grilla perfecta de "píxeles" (ej: 300x300 de resolución)
-grid_x, grid_y = np.mgrid[x_min:x_max:300j, y_min:y_max:300j]
+df_adq = pd.read_csv(archivo_csv_adquisicion)
+scattering = df_adq['Scattering_CH2 (V)'].values
+v_x_medido = df_adq['Monitoreo_X_CH1 (V)'].values  # solo para chequeo de consistencia
 
-# Interpolamos la nube de puntos distorsionada hacia la grilla perfecta
+# ---- Chequeo de sincronización 1 a 1 ----
+n_dutys = len(dcx_seq)
+n_adq = len(scattering)
+
+if n_dutys != n_adq:
+    print(f"[!] ADVERTENCIA: la secuencia de duty cycles tiene {n_dutys} puntos "
+          f"pero la adquisición tiene {n_adq} puntos.")
+    print("    Se recorta al mínimo común para no desalinear el resto del barrido.")
+    n_min = min(n_dutys, n_adq)
+    dcx_seq, dcy_seq = dcx_seq[:n_min], dcy_seq[:n_min]
+    x_real, y_real = x_real[:n_min], y_real[:n_min]
+    scattering = scattering[:n_min]
+    v_x_medido = v_x_medido[:n_min]
+else:
+    print(f"Sincronización OK: {n_dutys} puntos en ambos archivos.")
+
+# ---- (Opcional) chequeo de consistencia CH1 vs duty cycle programado ----
+# Si el monitoreo de X es proporcional al duty cycle, esta correlación debería
+# ser fuerte. Sirve como diagnóstico, no se usa para la reconstrucción.
+correlacion = np.corrcoef(v_x_medido, dcx_seq)[0, 1]
+print(f"Correlación entre CH1 medido y Dcx programado: {correlacion:.4f} "
+      f"(valores bajos pueden indicar pérdida de sincronismo)")
+
+# ---- Descartar puntos saturados, manteniendo la correspondencia con X,Y ----
+mascara_valida = scattering <= UMBRAL_SATURACION
+x_real = x_real[mascara_valida]
+y_real = y_real[mascara_valida]
+scattering = scattering[mascara_valida]
+
+
+# ==========================================================================
+# 4. INTERPOLAR A UNA GRILLA REGULAR Y GRAFICAR
+# ==========================================================================
+
+grid_x, grid_y = np.mgrid[
+    x_real.min():x_real.max():complex(NUM_PIXELS_X),
+    y_real.min():y_real.max():complex(NUM_PIXELS_Y)
+]
+
 grid_luz = griddata(
-    points=(X_fisico, Y_fisico), 
-    values=intensidad_luz, 
-    xi=(grid_x, grid_y), 
-    method='cubic' # 'cubic' suaviza bien las formas circulares
+    points=(x_real, y_real),
+    values=scattering,
+    xi=(grid_x, grid_y),
+    method='linear'
 )
 
-# =========================================================
-# 5. GRAFICACIÓN CON RELACIÓN DE ASPECTO CORREGIDA
-# =========================================================
-plt.figure(figsize=(8, 6))
-
-# Ploteamos la imagen transpuesta (T) porque np.mgrid orienta diferente los ejes
+plt.figure(figsize=(10, 6))
 plt.imshow(
-    grid_luz.T, 
-    extent=[x_min, x_max, y_min, y_max], 
-    origin='lower', 
+    grid_luz.T,
+    extent=[x_real.min(), x_real.max(), y_real.min(), y_real.max()],
+    origin='lower',
     cmap='viridis',
-    aspect='equal' # ¡MAGIA ACÁ! Esto fuerza a que 1um en X mida igual que 1um en Y
+    aspect='equal'
 )
-
-plt.colorbar(label='Intensidad de Scattering (V)')
-plt.title('Mapa de Discos de Silicio (1 $\mu$m) - Corregido por Cross-Talk')
-plt.xlabel('Posición Real X ($\mu$m)')
-plt.ylabel('Posición Real Y ($\mu$m)')
+plt.colorbar(label='Intensidad de Scattering (V) - CH2')
+plt.title('Reconstrucción 2D corregida (modelo cinemático directo)')
+plt.xlabel('Posición X ($\\mu$m)')
+plt.ylabel('Posición Y ($\\mu$m)')
 plt.grid(False)
 
-plt.tight_layout()
-plt.savefig('mapa_scattering_corregido.png', dpi=300)
+plt.savefig(f'reconstruccion_muestra_2D_{version}_corregida.png', dpi=300)
 plt.show()

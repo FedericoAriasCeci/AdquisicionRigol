@@ -8,9 +8,9 @@ CH_X = 1        # Canal 1: Monitoreo de Duty Cycles enviado a X
 CH_LUZ = 2      # Canal 2: Intensidad del fotodiodo (Scattering)
 
 # --- Configuración del Muestreo Coincidente con el ESP32 ---
-CANTIDAD_PUNTOS = 21630     # Total de puntos del barrido 2D
+CANTIDAD_PUNTOS = 44154     # Total de puntos del barrido 2D
 INTERVALO_SEG = 0.05         # Tiempo estimado entre puntos (pueden ajustarlo)
-ARCHIVO_CSV = 'mapeo_scattering_punto_a_punto_v3.csv'
+ARCHIVO_CSV = 'mapeo_scattering_punto_a_punto_0307_v1.csv'
 
 def adquisicion_punto_a_punto():
     rm = pyvisa.ResourceManager()
