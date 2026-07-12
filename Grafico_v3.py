@@ -52,8 +52,8 @@ adquisicion_path = rf'{ruta_adquisicion_csv}\{adquisicion_csv}'
 UMBRAL_SATURACION = 1.0
 
 # Resolución de la grilla de salida (píxeles de la imagen reconstruida)
-NUM_PIXELS_X = 300
-NUM_PIXELS_Y = 300
+NUM_PIXELS_X = 180
+NUM_PIXELS_Y = 180
 
 
 # ==========================================================================
