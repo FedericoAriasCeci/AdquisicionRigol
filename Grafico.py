@@ -6,7 +6,7 @@ from scipy.interpolate import griddata
 # 1. Cargar los datos del barrido recién adquirido
 version = 'v5_0107'
 
-archivo_csv = f'mapeo_scattering_punto_a_punto_0807_1834.csv'
+archivo_csv = r'C:\Users\Usuario\Desktop\Facu\Labo 6\AdquisicionRigol\mapeo_scattering_punto_a_punto_0807_1727.csv'
 df = pd.read_csv(archivo_csv)
 
 # Extraemos las columnas de interés
@@ -22,14 +22,14 @@ tiempo = df['Tiempo (s)'][df['Scattering_CH2 (V)'] <= 1].values
 # Con un rango de 8 um a pasos de 0.05 um, cada fila tiene ~160 puntos. 
 # Sumando tiempos de retorno, estimemos unas 25 filas para cubrir los 2.5 um (saltos de 0.1 um).
 total_puntos = len(voltaje_x)
-pasos_x_por_fila = 46  # Ajustar este número si conocen el tamaño exacto de su array de ida en X
+pasos_x_por_fila = 734  # Ajustar este número si conocen el tamaño exacto de su array de ida en X
 cant_filas_y = int(np.ceil(total_puntos / pasos_x_por_fila))
 
 # Creamos un eje Y teórico que asocie cada punto a su fila correspondiente
 y_discreto = np.zeros(total_puntos)
 for i in range(total_puntos):
     nro_fila = i // pasos_x_por_fila
-    y_discreto[i] = nro_fila * 0.05 # Saltos de 0.1 micrones
+    y_discreto[i] = nro_fila * 0.05# Saltos de 0.1 micrones
 
 # 3. Escalar el Voltaje de X a Micrones reales (0 a 8 um)
 v_min, v_max = voltaje_x.min(), voltaje_x.max()
